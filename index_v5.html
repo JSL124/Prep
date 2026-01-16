@@ -13,6 +13,9 @@
        DOM OVERLAYS (UI LAYERING)
        ========================= */
 
+    /* Global utility */
+    .hidden { display: none !important; }
+
     /* Timer: high but below modal overlay */
     #centerTimer {
       display: none;
@@ -51,14 +54,14 @@
 
     /* Top HUD bar is below timer in z-index */
     #topHud {
-      display: none;
+      display: none;             /* ✅ only one display declaration (JS sets to grid when needed) */
       position: fixed;
       left: 14px;
       right: 14px;
       top: 12px;
       z-index: 5100;
       pointer-events: none;
-      display: grid;
+      display: none;
       grid-template-columns: 1fr auto 1fr;
       gap: 10px;
       align-items: center;
@@ -99,6 +102,35 @@
       text-align: center;
     }
 
+    /* ✅ Round Event Banner */
+    #roundEventBar{
+      grid-column: 1 / -1;         /* topHud grid full width */
+      justify-self: center;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 2px solid rgba(255,209,102,0.95);
+      background: rgba(14,21,48,0.88);
+      box-shadow: 0 8px 0 rgba(0,0,0,0.28);
+      pointer-events: none;
+    }
+    #roundEventName{
+      font-family: Arial Black, Arial, sans-serif;
+      font-size: 12px;
+      color: #ffd166;
+      letter-spacing: 0.4px;
+      white-space: nowrap;
+    }
+    #roundEventDesc{
+      font-family: Arial, sans-serif;
+      font-size: 12px;
+      color: rgba(232,240,255,0.92);
+      opacity: 0.95;
+    }
+
     /* AI Thought: docked left (never middle), toggleable */
     #aiThought {
       position: fixed;
@@ -117,7 +149,10 @@
       background: rgba(14,21,48,0.82);
       box-shadow: 0 8px 0 rgba(0,0,0,0.28);
       padding: 10px 12px;
+
+      min-height: 120px;   /* ✅ card min height */
     }
+
     #aiThoughtHeader{
       display:flex;
       align-items:center;
@@ -146,7 +181,13 @@
       font-family: Arial, sans-serif;
       font-size: 14px;
       color: rgba(232,240,255,0.95);
-      line-height: 1.25;
+      line-height: 1.35;
+
+      white-space: pre-wrap;
+      word-break: break-word;
+
+      max-height: 140px;
+      overflow-y: auto;
     }
 
     /* If screen is short, shrink overlays a bit */
@@ -161,6 +202,12 @@
 
   <!-- DOM overlays -->
   <div id="topHud" aria-hidden="true">
+    <!-- ✅ Round Event Banner (shows active event this round) -->
+    <div id="roundEventBar" class="hidden" aria-hidden="true">
+      <div id="roundEventName">EVENT</div>
+      <div id="roundEventDesc">—</div>
+    </div>
+
     <div class="hudSide left">
       <div class="hudPill">
         <div class="hudLabel">AI $</div>
@@ -222,7 +269,7 @@ const H = 650;
 
 // >>> LLM Server 설정 (기본: 로컬 Express 서버)
 const AI_SERVER = window.AI_SERVER || 'http://127.0.0.1:3001';
-const AI_TIMEOUT_MS = 8000; // 프론트 타임아웃 (ms) - 서버 타임아웃과 비슷하게
+const AI_TIMEOUT_MS = 8000; // 프론트 타임아웃 (ms)
 
 // AI difficulty presets (Stage 1~3)
 const STAGES = [
@@ -230,10 +277,10 @@ const STAGES = [
     id: 1, name: "STAGE 1", desc: "Chill AI", diff: 1.00,
     profile: {
       style: 'Steady control',
-      aggression: 0.8,        // more conservative
-      bluff: 0.06,            // rare bluff
-      conserve: 0.70,         // holds more for later
-      spendCeil: 0.20,        // lower per-round ceiling
+      aggression: 0.8,
+      bluff: 0.06,
+      conserve: 0.70,
+      spendCeil: 0.20,
     }
   },
   {
@@ -272,7 +319,12 @@ const dom = {
   timerSub: document.getElementById('timerSub'),
   thoughtWrap: document.getElementById('aiThought'),
   thoughtText: document.getElementById('aiThoughtText'),
-  thoughtToggle: document.getElementById('aiThoughtToggle')
+  thoughtToggle: document.getElementById('aiThoughtToggle'),
+
+  // ✅ Round event bar nodes
+  roundEventBar: document.getElementById('roundEventBar'),
+  roundEventName: document.getElementById('roundEventName'),
+  roundEventDesc: document.getElementById('roundEventDesc'),
 };
 
 dom.thoughtToggle.addEventListener('click', () => {
@@ -378,11 +430,31 @@ function packStateForServer(scene){
   };
 }
 
-// rare events per round
+// ✅ rare events per round (FIXED probabilities)
 function rollRoundEvent(roundNumber){
   const r = Math.random();
-  if (r < 0.10) return { id:'vip', name:'VIP Passenger', desc:'Winner moves two passengers this round.' };
-  if (r < 0.20) return { id:'tax', name:'Tax Collector', desc:'Round winner pays +3 budget after this round.' };
+
+  // 10% maintenance
+  if (r < 0.10) return {
+    id:'maintenance',
+    name:'Lift Under Maintenance',
+    desc:'This round is skipped. No bids, lose $10, no score.'
+  };
+
+  // 10% vip (0.10 ~ 0.20)
+  if (r < 0.20) return {
+    id:'vip',
+    name:'VIP Passenger',
+    desc:'Winner moves two passengers this round.'
+  };
+
+  // 10% tax (0.20 ~ 0.30)
+  if (r < 0.30) return {
+    id:'tax',
+    name:'Tax Collector',
+    desc:'Round winner pays +3 budget after this round.'
+  };
+
   return null;
 }
 
@@ -511,9 +583,9 @@ class TitleScene extends Phaser.Scene {
     dom.thoughtWrap.classList.add('hidden');
     dom.thoughtToggle.textContent = 'SHOW';
 
-    // Hide topHud
+    // Hide topHud + round event bar
     dom.topHud.style.display = 'none';
-    dom.thoughtWrap.classList.add('hidden');
+    dom.roundEventBar?.classList.add('hidden');
 
     dom.timer.style.display = 'none';
     dom.timer.textContent = '—';
@@ -582,7 +654,7 @@ class StageScene extends Phaser.Scene {
     dom.timerSub.textContent = 'SELECT STAGE';
 
     dom.topHud.style.display = 'none';
-    dom.thoughtWrap.classList.add('hidden');
+    dom.roundEventBar?.classList.add('hidden');
 
     const bg = this.add.image(W/2, H/2, 'titleBG');
     bg.setAlpha(0.9);
@@ -729,16 +801,13 @@ class MainScene extends Phaser.Scene {
       player: { budget: START_BUDGET, score: 0, locked: false, bid: 0, lockedBid: null },
       ai:     { budget: START_BUDGET, score: 0, bid: 0, plannedBid: null },
 
-      // this will be driven by server too
       aiExpect: { low: 0, high: 0, center: 0, reason: '' },
 
       history: [],
       last:   { playerBid: null, aiBid: null, result: null },
 
-      // 종료 사유 상태
       end: { reason: null, winner: null },
 
-      // Rare round event (VIP / Tax)
       roundEvent: null,
     };
 
@@ -761,6 +830,23 @@ class MainScene extends Phaser.Scene {
     this.startRound();
   }
 
+  // ✅ Round event bar helpers
+  showRoundEventBar(evt){
+    if(!dom.roundEventBar) return;
+    dom.roundEventName.textContent = String(evt.name || 'EVENT').toUpperCase();
+    dom.roundEventDesc.textContent = String(evt.desc || '—');
+    dom.roundEventBar.classList.remove('hidden');
+    dom.roundEventBar.setAttribute('aria-hidden', 'false');
+
+    clearTimeout(this._evtBarTimer);
+    this._evtBarTimer = setTimeout(() => this.hideRoundEventBar(), 2200);
+  }
+  hideRoundEventBar(){
+    if(!dom.roundEventBar) return;
+    dom.roundEventBar.classList.add('hidden');
+    dom.roundEventBar.setAttribute('aria-hidden', 'true');
+  }
+
   isWinLocked(forSide /* 'player' | 'ai' */) {
     const s = this.state;
     const roundsLeft = Math.max(0, TOTAL_ROUNDS - s.round + 1);
@@ -776,7 +862,6 @@ class MainScene extends Phaser.Scene {
     this.enterEnd();
   }
 
-
   setThought(line){
     dom.thoughtText.textContent = line;
     dom.thoughtText.style.opacity = '0.65';
@@ -784,11 +869,10 @@ class MainScene extends Phaser.Scene {
     this._thoughtFade = setTimeout(() => { dom.thoughtText.style.opacity = '1'; }, 80);
   }
 
-  // ========= NEW: LLM planning (bid + expectation + thought) =========
+  // ========= LLM planning (bid + expectation + thought) =========
   async planAIDecision(){
     const s = this.state;
 
-    // (1) 서버 호출
     const payload = { state: packStateForServer(this) };
     const url = `${AI_SERVER}/api/ai/bid`;
 
@@ -802,18 +886,16 @@ class MainScene extends Phaser.Scene {
 
       s.ai.plannedBid = aiBid;
 
-      // 서버 예측값으로 aiExpect 업데이트 (center는 평균으로 잡음)
       const center = Math.round((low + high) / 2);
       s.aiExpect = { low, high, center, reason: 'LLM forecast.' };
 
-      // 게임 시작/라운드 시작 멘트
       if(thought) this.setThought(thought);
       else this.setThought(`I expect you around $${center} (range $${low}–$${high}).`);
 
       return true;
     }
 
-    // (2) 실패시 로컬 폴백
+    // 실패시 로컬 폴백
     s.ai.plannedBid = null;
     s.aiExpect = this.computeAIExpectation();
     this.setThought(`(Offline) I expect you around $${s.aiExpect.center} (range $${s.aiExpect.low}–$${s.aiExpect.high}).`);
@@ -963,9 +1045,49 @@ class MainScene extends Phaser.Scene {
     const evt = rollRoundEvent(s.round);
     s.roundEvent = evt;
 
+    // ✅ show/hide HUD event bar immediately
+    if(evt) this.showRoundEventBar(evt);
+    else this.hideRoundEventBar();
+
     const goBid = () => this.enterBidPhase();
+
+    // ✅ Maintenance = skip round entirely (+$10 penalty)
+    const skipRound = () => {
+      dom.timerSub.textContent = 'MAINTENANCE';
+      this.setThought('Lift under maintenance — skipping this round. -$10 to both sides.');
+
+      s.player.budget = Math.max(0, s.player.budget - 10);
+      s.ai.budget     = Math.max(0, s.ai.budget - 10);
+
+      s.last = { playerBid: null, aiBid: null, result: 'skipped' };
+
+      s.history.push({
+        round: s.round,
+        stageId: this.selectedStage.id,
+        expectedLow: null,
+        expectedHigh: null,
+        expectedCenter: null,
+        playerBid: null,
+        aiBid: null,
+        result: 'skipped',
+        diffFromExpected: null,
+        event: evt.name,
+        ts: Date.now()
+      });
+
+      this.updateHUD();
+
+      this.time.delayedCall(600, () => {
+        s.animBusy = false;
+        this.enterNextRound();
+      });
+    };
+
     if(evt){
-      this.showRoundEventPopup(evt).then(goBid);
+      this.showRoundEventPopup(evt).then(() => {
+        if(evt.id === 'maintenance') skipRound();
+        else goBid();
+      });
     } else {
       goBid();
     }
@@ -976,7 +1098,7 @@ class MainScene extends Phaser.Scene {
       const overlay = document.createElement('div');
       overlay.style.position = 'fixed';
       overlay.style.inset = '0';
-      overlay.style.zIndex = '9999'; // above timer/top HUD
+      overlay.style.zIndex = '9999';
       overlay.style.display = 'flex';
       overlay.style.alignItems = 'center';
       overlay.style.justifyContent = 'center';
@@ -1011,7 +1133,6 @@ class MainScene extends Phaser.Scene {
       overlay.appendChild(panel);
       document.body.appendChild(overlay);
 
-      // audio ping (non-blocking, short)
       try { this.sfx.beep({ freq: 760, dur: 0.28, gain: 0.025, type: 'triangle' }); } catch(_e){}
 
       let closed = false;
@@ -1035,6 +1156,9 @@ class MainScene extends Phaser.Scene {
     s.player.lockedBid = null;
     s.ai.bid = 0;
     s.ai.plannedBid = null;
+
+    // ✅ Always have a baseline expectation immediately (prevents 0/0/0 early UI)
+    s.aiExpect = this.computeAIExpectation();
 
     this.aiBidCard.setAlpha(0);
     this.lockBtn.container.active = true;
@@ -1061,9 +1185,9 @@ class MainScene extends Phaser.Scene {
       callback: () => this.onSecondTick()
     });
 
-    // >>> NEW: LLM에게 이번 라운드 AI bid/멘트/예측을 미리 받아서 저장 (bid는 reveal 전까지 숨김)
+    // LLM plan (async)
     this.setThought('AI is thinking…');
-    this.planAIDecision().finally(()=>{ /* no-op */ });
+    this.planAIDecision().finally(()=>{});
 
     this.updateHUD();
   }
@@ -1113,7 +1237,6 @@ class MainScene extends Phaser.Scene {
 
     this.tweens.killTweensOf(this.car);
 
-    // >>> NEW: 서버에서 미리 받아둔 plannedBid 사용 (없으면 로컬 폴백)
     s.ai.bid = (typeof s.ai.plannedBid === 'number')
       ? clamp(s.ai.plannedBid, 0, s.ai.budget)
       : this.computeAIBid();
@@ -1189,7 +1312,6 @@ class MainScene extends Phaser.Scene {
       ts: Date.now()
     });
 
-    // after-round AI comment (로컬 문장 유지 — 원하면 이것도 서버로 바꿔줄 수 있음)
     this.setThought(this.makeAIAfterRoundLine(e, playerBid, aiBid, result));
 
     dom.timerSub.textContent =
@@ -1268,10 +1390,8 @@ class MainScene extends Phaser.Scene {
     const s = this.state;
     s.phase = 'NEXT';
 
-    // 0) 라운드가 끝났으니 남은 라운드 수 계산
     const roundsLeft = Math.max(0, TOTAL_ROUNDS - s.round + 1);
 
-    // 1) ✅ Lock Win (승리 확정) 먼저 체크 → 즉시 종료
     if (this.isWinLocked('player')) {
       this.setEnd('player', `LOCKED_WIN (lead too large for ${roundsLeft} rounds left)`);
       return;
@@ -1281,7 +1401,6 @@ class MainScene extends Phaser.Scene {
       return;
     }
 
-    // 2) ✅ Budget 0 즉시 패배 (Lock win 아님이 보장됨)
     if (s.player.budget <= 0 && s.ai.budget <= 0) {
       this.setEnd('draw', 'DOUBLE_BANKRUPT');
       return;
@@ -1295,44 +1414,51 @@ class MainScene extends Phaser.Scene {
       return;
     }
 
-    // 3) ✅ 정상 종료 (라운드 다 끝남)
     if (s.round >= TOTAL_ROUNDS) {
-      // 라운드가 끝났고 lock win도 아니고 bankrupt도 아니면 점수로 승패
       if (s.player.score > s.ai.score) this.setEnd('player', 'ROUNDS_COMPLETE_SCORE');
       else if (s.ai.score > s.player.score) this.setEnd('ai', 'ROUNDS_COMPLETE_SCORE');
       else this.setEnd('draw', 'ROUNDS_COMPLETE_TIE');
       return;
     }
 
-    // 4) 다음 라운드 진행
     this.time.delayedCall(450, () => {
       s.round += 1;
       this.startRound();
     });
   }
 
-
   enterEnd(){
     const s = this.state;
     s.phase = 'END';
     this.lockBtn.container.active = false;
+    this.hideRoundEventBar();
     this.showEndReport();
   }
 
   async showEndReport(){
     const s = this.state;
 
-    const bids = s.history.map(r => r.playerBid);
-    const aiBids = s.history.map(r => r.aiBid);
-    const expected = s.history.map(r => r.expectedCenter);
+    const bids = s.history.map(r => r.playerBid).filter(v => typeof v === 'number');
+    const aiBids = s.history.map(r => r.aiBid).filter(v => typeof v === 'number');
+    const expected = s.history.map(r => r.expectedCenter).filter(v => typeof v === 'number');
 
     const avgBid = Math.round(mean(bids));
     const avgAI  = Math.round(mean(aiBids));
     const sdBid  = Math.round(Math.sqrt(variance(bids)));
 
     const efficiency = bids.length ? Math.round((s.player.score / Math.max(1, mean(bids))) * 100) : 0;
-    const bluffRate = bids.length ? Math.round(100 * (bids.filter((b,i)=>Math.abs(b-expected[i])>=15).length / bids.length)) : 0;
-    const withinRate = bids.length ? Math.round(100 * (s.history.filter(r => r.playerBid >= r.expectedLow && r.playerBid <= r.expectedHigh).length / bids.length)) : 0;
+    const bluffRate = (bids.length && expected.length)
+      ? Math.round(100 * (bids.filter((b,i)=>Math.abs(b-(expected[i] ?? b))>=15).length / bids.length))
+      : 0;
+
+    const withinRate = bids.length
+      ? Math.round(100 * (s.history.filter(r =>
+          typeof r.playerBid === 'number' &&
+          typeof r.expectedLow === 'number' &&
+          typeof r.expectedHigh === 'number' &&
+          r.playerBid >= r.expectedLow && r.playerBid <= r.expectedHigh
+        ).length / bids.length))
+      : 0;
 
     const wins = s.player.score, losses = s.ai.score, draws = TOTAL_ROUNDS - wins - losses;
 
@@ -1342,7 +1468,7 @@ class MainScene extends Phaser.Scene {
 
     const afterLossBids = [];
     s.history.forEach((r, idx) => {
-      if(idx > 0 && s.history[idx-1].result === 'ai') afterLossBids.push(r.playerBid);
+      if(idx > 0 && s.history[idx-1].result === 'ai' && typeof r.playerBid === 'number') afterLossBids.push(r.playerBid);
     });
     const adaptScore = afterLossBids.length ? (mean(afterLossBids) - mean(bids)) : 0;
     let adapt = 'Moderate';
@@ -1357,13 +1483,12 @@ class MainScene extends Phaser.Scene {
     const endReason = s.end?.reason || null;
 
     let outcome = 'MATCH DRAW!';
-    let outcomeSub = ''; // 추가 설명 (작게)
+    let outcomeSub = '';
 
     if (endWinner === 'player') outcome = 'YOU WIN THE MATCH!';
     else if (endWinner === 'ai') outcome = 'AI WINS THE MATCH!';
     else if (endWinner === 'draw') outcome = 'MATCH DRAW!';
 
-    // reason 기반 문구
     if (endReason === 'PLAYER_BANKRUPT') outcomeSub = 'Victory by bankruptcy (You hit $0).';
     else if (endReason === 'AI_BANKRUPT') outcomeSub = 'Victory by bankruptcy (AI hit $0).';
     else if (endReason === 'DOUBLE_BANKRUPT') outcomeSub = 'Both budgets hit $0.';
@@ -1371,7 +1496,6 @@ class MainScene extends Phaser.Scene {
     else if (endReason === 'ROUNDS_COMPLETE_SCORE') outcomeSub = 'All rounds completed.';
     else if (endReason === 'ROUNDS_COMPLETE_TIE') outcomeSub = 'All rounds completed (tie).';
 
-    // fallback: if endWinner not provided, infer from score
     if (!endWinner) {
       if (wins > losses) outcome = 'YOU WIN THE MATCH!';
       else if (losses > wins) outcome = 'AI WINS THE MATCH!';
@@ -1452,7 +1576,6 @@ class MainScene extends Phaser.Scene {
       fontFamily:'Arial Black', fontSize:'14px', color:'#9bb0ff'
     }).setOrigin(0,0);
 
-    // >>> NEW: 서버 리포트 자리 (없으면 기존 로컬 takeway 사용)
     const takeawayBody = this.add.text(rightX, topY+234, `"Generating LLM report..."`, {
       fontFamily:'Arial', fontSize:'18px', color:'#7cffc9',
       wordWrap: { width: 360 }
@@ -1472,14 +1595,12 @@ class MainScene extends Phaser.Scene {
     this.ui.add(overlay);
     this.cameras.main.flash(220, 160, 255, 255);
 
-    // 서버 리포트 호출
     const payload = { state: packStateForServer(this) };
     const rr = await postJSON(`${AI_SERVER}/api/ai/report`, payload, Math.max(AI_TIMEOUT_MS, 1600));
     if(rr.ok && rr.data && rr.data.ok && rr.data.report){
       const text = String(rr.data.report).trim();
       takeawayBody.setText(`"${text}"`);
     } else {
-      // 로컬 폴백
       const fallback = this.buildTakeaway(risk, effLabel, bluffRate, withinRate, wins, losses);
       takeawayBody.setText(`"${fallback}"`);
     }
@@ -1595,16 +1716,14 @@ class MainScene extends Phaser.Scene {
     const spendCeil = prof.spendCeil ?? 0.25;
     const bluffChance = prof.bluff ?? 0.1;
 
-    // Pressure: losing and few rounds left -> push; winning comfortably -> conserve but block
     const pressureBase = clamp(
-      (-scoreGap / Math.max(1, roundsLeft)) + // if behind, positive pressure
+      (-scoreGap / Math.max(1, roundsLeft)) +
       (roundProgress > 0.7 ? 0.15 : 0) +
       (playerBudget > aiBudget ? 0.1 : 0),
       -0.4, 1.6
     );
     const pressure = lockedLose ? 1.6 : lockedWin ? -0.4 : pressureBase;
 
-    // Base spend band
     const baseSpend = aiBudget / roundsLeft;
     const conserveFactor = lerp(0.6, 0.9, conserve);
     const aggroFactor = lerp(0.95, 1.35, clamp(aggression, 0.6, 1.8)) + pressure * 0.3;
@@ -1612,35 +1731,28 @@ class MainScene extends Phaser.Scene {
     let minSpend = baseSpend * conserveFactor * (1 + pressure * 0.35);
     let maxSpend = baseSpend * aggroFactor * (1.15 + pressure);
 
-    // Ceiling based on profile and pressure
     const maxCeil = aiBudget * clamp(spendCeil + pressure * 0.25, 0.12, 0.9);
     maxSpend = Math.min(maxSpend, maxCeil);
 
-    // Ensure we contest expected high
     const targetBeat = playerLikely + 2 + Math.max(0, pressure * 4);
     maxSpend = Math.max(maxSpend, targetBeat * 1.05);
     minSpend = Math.max(minSpend, targetBeat * 0.6);
 
-    // Clamp band
     minSpend = clamp(minSpend, 1, aiBudget);
     maxSpend = clamp(maxSpend, minSpend + 1, aiBudget);
 
-    // Predictability adjustment
     const recent = s.history.slice(-5).map(r => r.playerBid || 0);
     const variance = recent.length ? Math.sqrt(this.varianceArr(recent)) : 0;
     const predictability = clamp(1 - (variance / 25), 0.35, 0.95);
 
-    // Base bid as blend: predictable -> closer to min; chaotic -> mid/high
     let bid = lerp(minSpend, maxSpend, 0.45 + (1 - predictability) * 0.35);
 
-    // Locked states
     if (lockedWin) {
-      bid = Math.min(bid, Math.max(1, expectLow)); // conserve when win is locked
+      bid = Math.min(bid, Math.max(1, expectLow));
     } else if (lockedLose) {
-      bid = Math.max(maxSpend * 0.95, targetBeat); // go all-in-ish when doomed
+      bid = Math.max(maxSpend * 0.95, targetBeat);
     }
 
-    // Bluff / spike behavior
     const doBluff = Math.random() < (bluffChance + pressure * 0.05 + (diff-1)*0.05);
     if (doBluff) {
       const spike = lerp(maxSpend, Math.min(aiBudget, targetBeat + 14), 0.7);
@@ -1651,7 +1763,6 @@ class MainScene extends Phaser.Scene {
     return bid;
   }
 
-  // helper for computeAIBid
   varianceArr(arr){
     if(!arr.length) return 0;
     const m = mean(arr);
@@ -1669,6 +1780,11 @@ class MainScene extends Phaser.Scene {
     dom.aiScore.textContent = `${s.ai.score}`;
 
     const t = Math.max(0, s.timer);
+
+    // ✅ ensure text node exists
+    if(!dom.timer.firstChild || dom.timer.firstChild.nodeType !== Node.TEXT_NODE){
+      dom.timer.insertBefore(document.createTextNode(''), dom.timer.firstChild);
+    }
     dom.timer.firstChild.nodeValue = `${t}s`;
 
     if(s.phase === 'BID'){
@@ -1695,7 +1811,6 @@ class MainScene extends Phaser.Scene {
     if(s.phase === 'BID') this.aiBidCard.setAlpha(0);
   }
 
-  // ---------- tiny async helpers ----------
   tweenP(cfg){ return new Promise(resolve => this.tweens.add({ ...cfg, onComplete: resolve })); }
   delayP(ms){ return new Promise(resolve => this.time.delayedCall(ms, resolve)); }
 
