@@ -1,0 +1,1732 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>THE DROP - Sealed Bid Elevator</title>
+  <style>
+    html, body { margin:0; padding:0; background:#070b18; height:100%; }
+    #game { width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
+    canvas { image-rendering: pixelated; }
+
+    /* =========================
+       DOM OVERLAYS (UI LAYERING)
+       ========================= */
+
+    /* Timer: high but below modal overlay */
+    #centerTimer {
+      display: none;
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 8000;             /* below popup overlay (9999) */
+      pointer-events: none;      /* never block input */
+      padding: 14px 18px;
+      border-radius: 14px;
+      border: 2px solid rgba(97,214,255,0.85);
+      background: rgba(14,21,48,0.78);
+      box-shadow:
+        0 10px 0 rgba(0,0,0,0.35),
+        0 0 18px rgba(97,214,255,0.18);
+      color: #e8f0ff;
+      font-family: Arial Black, Arial, sans-serif;
+      font-size: 42px;
+      letter-spacing: 1px;
+      line-height: 1;
+      text-align: center;
+      min-width: 140px;
+      backdrop-filter: blur(4px);
+    }
+
+    /* Small subtitle under timer (optional) */
+    #timerSub {
+      display:block;
+      margin-top: 6px;
+      font-size: 12px;
+      font-family: Arial, sans-serif;
+      color: rgba(207,225,255,0.85);
+      letter-spacing: 0.4px;
+    }
+
+    /* Top HUD bar is below timer in z-index */
+    #topHud {
+      display: none;
+      position: fixed;
+      left: 14px;
+      right: 14px;
+      top: 12px;
+      z-index: 5100;
+      pointer-events: none;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .hudSide {
+      display:flex;
+      gap: 10px;
+      align-items: center;
+      pointer-events: none;
+    }
+    .hudSide.right { justify-content: flex-end; }
+
+    .hudPill{
+      pointer-events:none;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 2px solid rgba(42,58,119,0.95);
+      background: rgba(14,21,48,0.82);
+      box-shadow: 0 8px 0 rgba(0,0,0,0.28);
+      min-width: 130px;
+    }
+    .hudLabel{
+      font-family: Arial Black, Arial, sans-serif;
+      font-size: 11px;
+      color: rgba(155,176,255,0.95);
+      margin-bottom: 4px;
+    }
+    .hudValue{
+      font-family: Arial Black, Arial, sans-serif;
+      font-size: 16px;
+      color: #e8f0ff;
+    }
+
+    #roundPill{
+      justify-self: center;
+      min-width: 190px;
+      text-align: center;
+    }
+
+    /* AI Thought: docked left (never middle), toggleable */
+    #aiThought {
+      position: fixed;
+      left: 14px;
+      top: 98px;
+      z-index: 5050; /* below topHud, below timer */
+      width: 420px;
+      max-width: calc(50vw - 40px);
+      pointer-events: auto; /* allow toggle button click */
+    }
+    #aiThought.hidden { display:none; }
+
+    #aiThoughtCard{
+      border-radius: 14px;
+      border: 2px solid rgba(42,58,119,0.95);
+      background: rgba(14,21,48,0.82);
+      box-shadow: 0 8px 0 rgba(0,0,0,0.28);
+      padding: 10px 12px;
+    }
+    #aiThoughtHeader{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    #aiThoughtTitle{
+      font-family: Arial Black, Arial, sans-serif;
+      font-size: 11px;
+      color: rgba(155,176,255,0.95);
+      letter-spacing: 0.3px;
+    }
+    #aiThoughtToggle{
+      pointer-events: auto;
+      cursor: pointer;
+      font-family: Arial Black, Arial, sans-serif;
+      font-size: 11px;
+      color: #e8f0ff;
+      background: rgba(11,23,58,0.8);
+      border: 2px solid rgba(42,58,119,0.95);
+      border-radius: 10px;
+      padding: 6px 10px;
+    }
+    #aiThoughtText{
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      color: rgba(232,240,255,0.95);
+      line-height: 1.25;
+    }
+
+    /* If screen is short, shrink overlays a bit */
+    @media (max-height: 700px){
+      #centerTimer { font-size: 36px; padding: 12px 16px; }
+      #aiThought { top: 86px; width: 380px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+
+  <!-- DOM overlays -->
+  <div id="topHud" aria-hidden="true">
+    <div class="hudSide left">
+      <div class="hudPill">
+        <div class="hudLabel">AI $</div>
+        <div id="hudAiBudget" class="hudValue">100</div>
+      </div>
+      <div class="hudPill">
+        <div class="hudLabel">AI SCORE</div>
+        <div id="hudAiScore" class="hudValue">0</div>
+      </div>
+    </div>
+
+    <div id="roundPill" class="hudPill">
+      <div class="hudLabel">ROUND</div>
+      <div id="hudRound" class="hudValue">1/10</div>
+    </div>
+
+    <div class="hudSide right">
+      <div class="hudPill">
+        <div class="hudLabel">YOU SCORE</div>
+        <div id="hudYouScore" class="hudValue">0</div>
+      </div>
+      <div class="hudPill">
+        <div class="hudLabel">YOU $</div>
+        <div id="hudYouBudget" class="hudValue">100</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="centerTimer" aria-live="polite">
+    10s
+    <span id="timerSub">PLACE YOUR BID</span>
+  </div>
+
+  <div id="aiThought">
+    <div id="aiThoughtCard">
+      <div id="aiThoughtHeader">
+        <div id="aiThoughtTitle">AI THOUGHT</div>
+        <button id="aiThoughtToggle" type="button">HIDE</button>
+      </div>
+      <div id="aiThoughtText">Waiting for your move…</div>
+    </div>
+  </div>
+
+  <!-- Phaser 3 CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+
+  <script>
+/* ===== START: PATCHED SCRIPT (LLM AI BID + THOUGHT + REPORT) ===== */
+
+// =========================
+// CONFIG
+// =========================
+const TOTAL_ROUNDS = 10;
+const ROUND_SECONDS = 10;
+const START_BUDGET = 100;
+
+const W = 1100;
+const H = 650;
+
+// >>> LLM Server 설정 (기본: 로컬 Express 서버)
+const AI_SERVER = window.AI_SERVER || 'http://127.0.0.1:3001';
+const AI_TIMEOUT_MS = 8000; // 프론트 타임아웃 (ms) - 서버 타임아웃과 비슷하게
+
+// AI difficulty presets (Stage 1~3)
+const STAGES = [
+  {
+    id: 1, name: "STAGE 1", desc: "Chill AI", diff: 1.00,
+    profile: {
+      style: 'Steady control',
+      aggression: 0.8,        // more conservative
+      bluff: 0.06,            // rare bluff
+      conserve: 0.70,         // holds more for later
+      spendCeil: 0.20,        // lower per-round ceiling
+    }
+  },
+  {
+    id: 2, name: "STAGE 2", desc: "Smart AI", diff: 1.25,
+    profile: {
+      style: 'Adaptive mid-pressure',
+      aggression: 1.05,
+      bluff: 0.12,
+      conserve: 0.55,
+      spendCeil: 0.30,
+    }
+  },
+  {
+    id: 3, name: "STAGE 3", desc: "Savage AI", diff: 1.55,
+    profile: {
+      style: 'High-pressure, opportunistic',
+      aggression: 1.4,
+      bluff: 0.22,
+      conserve: 0.30,
+      spendCeil: 0.45,
+    }
+  },
+];
+
+// =========================
+// DOM HUD helpers
+// =========================
+const dom = {
+  topHud: document.getElementById('topHud'),
+  round: document.getElementById('hudRound'),
+  youBudget: document.getElementById('hudYouBudget'),
+  aiBudget: document.getElementById('hudAiBudget'),
+  youScore: document.getElementById('hudYouScore'),
+  aiScore: document.getElementById('hudAiScore'),
+  timer: document.getElementById('centerTimer'),
+  timerSub: document.getElementById('timerSub'),
+  thoughtWrap: document.getElementById('aiThought'),
+  thoughtText: document.getElementById('aiThoughtText'),
+  thoughtToggle: document.getElementById('aiThoughtToggle')
+};
+
+dom.thoughtToggle.addEventListener('click', () => {
+  const hidden = dom.thoughtWrap.classList.toggle('hidden');
+  dom.thoughtToggle.textContent = hidden ? 'SHOW' : 'HIDE';
+});
+
+// =========================
+// tiny SFX (WebAudio)
+// =========================
+class SFX {
+  constructor(scene){ this.ctx = scene.sound.context; this.enabled = true; }
+  beep({freq=440, dur=0.07, type="square", gain=0.03, detune=0, slideTo=null}){
+    if(!this.enabled) return;
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+    osc.detune.setValueAtTime(detune, t0);
+    if(slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g); g.connect(ctx.destination);
+    osc.start(t0); osc.stop(t0 + dur + 0.02);
+  }
+  click(){ this.beep({freq:700, dur:0.04, gain:0.02, type:"square"}); }
+  lock(){ this.beep({freq:520, dur:0.06, gain:0.03}); this.beep({freq:780, dur:0.05, gain:0.02}); }
+  reveal(){ this.beep({freq:260, dur:0.12, gain:0.03, type:"sawtooth", slideTo:520}); }
+  win(){ this.beep({freq:660, dur:0.10, gain:0.035}); this.beep({freq:990, dur:0.12, gain:0.03}); }
+  lose(){ this.beep({freq:220, dur:0.10, gain:0.03, type:"triangle"}); }
+  tie(){ this.beep({freq:330, dur:0.08, gain:0.025, type:"triangle"}); this.beep({freq:330, dur:0.08, gain:0.02, type:"triangle", detune:-25}); }
+  door(){ this.beep({freq:880, dur:0.05, gain:0.02}); }
+  ding(){ this.beep({freq:1046, dur:0.07, gain:0.03}); this.beep({freq:1318, dur:0.09, gain:0.03}); }
+}
+
+// =========================
+// helpers
+// =========================
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a,b,t)=>a+(b-a)*t;
+
+function mean(arr){ return arr.length ? arr.reduce((s,x)=>s+x,0)/arr.length : 0; }
+function variance(arr){
+  if(arr.length < 2) return 0;
+  const m = mean(arr);
+  return arr.reduce((s,x)=>s+(x-m)*(x-m),0)/(arr.length-1);
+}
+
+// =========================
+// LLM Fetch helpers
+// =========================
+async function postJSON(url, body, timeoutMs=AI_TIMEOUT_MS){
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: ctrl.signal,
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(()=>null);
+    return { ok: res.ok, status: res.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, data: null, error: String(e?.message || e) };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// 이 게임 상태를 서버가 이해하는 형태로 만들어서 보냄
+function packStateForServer(scene){
+  const s = scene.state;
+  const profile = scene.selectedStage.profile || {};
+  return {
+    round: s.round,
+    totalRounds: TOTAL_ROUNDS,
+    stage: {
+      id: scene.selectedStage.id,
+      diff: scene.selectedStage.diff,
+      name: scene.selectedStage.name,
+      profile: {
+        style: profile.style || '',
+        aggression: profile.aggression ?? 1,
+        bluff: profile.bluff ?? 0.1,
+        conserve: profile.conserve ?? 0.5,
+        spendCeil: profile.spendCeil ?? 0.25,
+      },
+    },
+    player: {
+      budget: s.player.budget,
+      score: s.player.score,
+      lockedBid: s.player.lockedBid
+    },
+    ai: {
+      budget: s.ai.budget,
+      score: s.ai.score
+    },
+    history: (s.history || []).slice(-8),
+  };
+}
+
+// rare events per round
+function rollRoundEvent(roundNumber){
+  const r = Math.random();
+  if (r < 0.10) return { id:'vip', name:'VIP Passenger', desc:'Winner moves two passengers this round.' };
+  if (r < 0.20) return { id:'tax', name:'Tax Collector', desc:'Round winner pays +3 budget after this round.' };
+  return null;
+}
+
+// =========================
+// buildTextures
+// =========================
+function buildTextures(scene){
+  const g = scene.add.graphics();
+
+  // panel
+  g.clear();
+  g.fillStyle(0x121a33, 1);
+  g.fillRoundedRect(0,0, 280, 70, 10);
+  g.lineStyle(2, 0x2a3a77, 1);
+  g.strokeRoundedRect(0,0, 280, 70, 10);
+  g.generateTexture('panel', 280, 70);
+
+  // tag
+  g.clear();
+  g.fillStyle(0x0e1530, 1);
+  g.fillRoundedRect(0,0, 190, 44, 10);
+  g.lineStyle(2, 0x2a3a77, 1);
+  g.strokeRoundedRect(0,0, 190, 44, 10);
+  g.generateTexture('tag', 190, 44);
+
+  // shaft
+  g.clear();
+  g.fillStyle(0x0d1433, 1);
+  g.fillRoundedRect(0,0, 280, 520, 14);
+  g.lineStyle(2, 0x2a3a77, 0.75);
+  g.strokeRoundedRect(0,0, 280, 520, 14);
+  g.lineStyle(2, 0x000000, 0.20);
+  g.strokeRoundedRect(5,5, 270, 510, 12);
+  g.generateTexture('shaft', 280, 520);
+
+  // car
+  g.clear();
+  g.fillStyle(0x141f46, 1);
+  g.fillRoundedRect(0,0, 240, 180, 14);
+  g.lineStyle(2, 0x3a52b1, 1);
+  g.strokeRoundedRect(0,0, 240, 180, 14);
+  g.lineStyle(2, 0x000000, 0.30);
+  g.strokeRoundedRect(8,8, 224, 164, 12);
+  g.fillStyle(0x0a0f23, 1);
+  g.fillRect(0, 166, 240, 14);
+  g.generateTexture('car', 240, 180);
+
+  // door
+  g.clear();
+  g.fillStyle(0x1b2a61, 1);
+  g.fillRoundedRect(0,0, 105, 150, 10);
+  g.lineStyle(2, 0x000000, 0.35);
+  g.strokeRoundedRect(0,0, 105, 150, 10);
+  g.lineStyle(2, 0xffffff, 0.08);
+  g.strokeRoundedRect(6,6, 93, 138, 8);
+  g.generateTexture('door', 105, 150);
+
+  // persons (2-frame)
+  function personTex(key, bodyColor){
+    // A
+    g.clear();
+    g.fillStyle(0xffd6a6, 1);
+    g.fillRoundedRect(8, 0, 16, 16, 4);
+    g.lineStyle(2, 0x000000, 0.40);
+    g.strokeRoundedRect(8, 0, 16, 16, 4);
+    g.fillStyle(bodyColor, 1);
+    g.fillRoundedRect(6, 16, 20, 16, 4);
+    g.lineStyle(2, 0x000000, 0.40);
+    g.strokeRoundedRect(6, 16, 20, 16, 4);
+    g.fillStyle(0x27304f, 1);
+    g.fillRoundedRect(7, 32, 9, 12, 3);
+    g.fillRoundedRect(16, 32, 9, 12, 3);
+    g.lineStyle(2, 0x000000, 0.35);
+    g.strokeRoundedRect(7, 32, 9, 12, 3);
+    g.strokeRoundedRect(16, 32, 9, 12, 3);
+    g.generateTexture(key+'A', 32, 46);
+
+    // B
+    g.clear();
+    g.fillStyle(0xffd6a6, 1);
+    g.fillRoundedRect(8, 0, 16, 16, 4);
+    g.lineStyle(2, 0x000000, 0.40);
+    g.strokeRoundedRect(8, 0, 16, 16, 4);
+    g.fillStyle(bodyColor, 1);
+    g.fillRoundedRect(6, 16, 20, 16, 4);
+    g.lineStyle(2, 0x000000, 0.40);
+    g.strokeRoundedRect(6, 16, 20, 16, 4);
+    g.fillStyle(0x27304f, 1);
+    g.fillRoundedRect(7, 33, 9, 11, 3);
+    g.fillRoundedRect(16, 31, 9, 13, 3);
+    g.lineStyle(2, 0x000000, 0.35);
+    g.strokeRoundedRect(7, 33, 9, 11, 3);
+    g.strokeRoundedRect(16, 31, 9, 13, 3);
+    g.generateTexture(key+'B', 32, 46);
+  }
+  personTex('p', 0x7cffc9);
+  personTex('a', 0xff6b6b);
+
+  // particle px
+  g.clear();
+  g.fillStyle(0xffffff, 1);
+  g.fillRect(0,0, 3,3);
+  g.generateTexture('px', 3,3);
+
+  g.destroy();
+}
+
+// =========================
+// Boot / Preload
+// =========================
+class BootScene extends Phaser.Scene {
+  constructor(){ super('boot'); }
+  preload(){ this.load.image('titleBG', 'title.png'); }
+  create(){ this.scene.start('title'); }
+}
+
+// =========================
+// Title Screen
+// =========================
+class TitleScene extends Phaser.Scene {
+  constructor(){ super('title'); }
+  create(){
+    this.sfx = new SFX(this);
+
+    // Hide thought in menus
+    dom.thoughtWrap.classList.add('hidden');
+    dom.thoughtToggle.textContent = 'SHOW';
+
+    // Hide topHud
+    dom.topHud.style.display = 'none';
+    dom.thoughtWrap.classList.add('hidden');
+
+    dom.timer.style.display = 'none';
+    dom.timer.textContent = '—';
+    dom.timer.appendChild(dom.timerSub);
+    dom.timerSub.textContent = 'PRESS GAME START';
+
+    const bg = this.add.image(W/2, H/2, 'titleBG');
+    this.fitImageCover(bg, W, H);
+
+    this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.18);
+
+    this.makeNeonButton(W/2, H*0.78, 300, 70, 'GAME START', () => {
+      this.sfx.click();
+      this.cameras.main.flash(180, 160, 255, 255);
+      this.time.delayedCall(160, () => this.scene.start('stage'));
+    });
+
+    this.input.once('pointerdown', () => { try { this.sound.context.resume(); } catch(e){} });
+  }
+
+  fitImageCover(img, targetW, targetH){
+    const iw = img.width, ih = img.height;
+    const scale = Math.max(targetW/iw, targetH/ih);
+    img.setScale(scale);
+  }
+
+  makeNeonButton(x,y,w,h,label,onClick){
+    const c = this.add.container(x,y);
+
+    const glow = this.add.rectangle(0,0,w+12,h+12,0x00e5ff,0.12);
+    glow.setBlendMode(Phaser.BlendModes.ADD);
+
+    const bg = this.add.rectangle(0,0,w,h,0x08122b,0.75).setStrokeStyle(2, 0x61d6ff, 0.9);
+    const inner = this.add.rectangle(0,0,w-10,h-10,0x0b173a,0.75).setStrokeStyle(2, 0x2a3a77, 0.8);
+
+    const t = this.add.text(0, 2, label, {
+      fontFamily:'Arial Black', fontSize:'26px', color:'#e8f0ff'
+    }).setOrigin(0.5,0.5);
+
+    const hit = this.add.rectangle(0,0,w,h,0x000000,0).setInteractive({ useHandCursor:true });
+
+    hit.on('pointerdown', () => { c.y += 2; this.sfx.click(); });
+    hit.on('pointerup', () => { c.y -= 2; onClick(); });
+    hit.on('pointerover', () => { this.tweens.add({ targets:[glow], alpha:0.22, duration:120 }); });
+    hit.on('pointerout', () => { this.tweens.add({ targets:[glow], alpha:0.12, duration:160 }); });
+
+    c.add([glow, bg, inner, t, hit]);
+    return c;
+  }
+}
+
+// =========================
+// Stage Select
+// =========================
+class StageScene extends Phaser.Scene {
+  constructor(){ super('stage'); }
+  create(){
+    this.sfx = new SFX(this);
+
+    dom.thoughtWrap.classList.add('hidden');
+    dom.thoughtToggle.textContent = 'SHOW';
+
+    dom.timer.style.display = 'none';
+    dom.timer.textContent = '—';
+    dom.timer.appendChild(dom.timerSub);
+    dom.timerSub.textContent = 'SELECT STAGE';
+
+    dom.topHud.style.display = 'none';
+    dom.thoughtWrap.classList.add('hidden');
+
+    const bg = this.add.image(W/2, H/2, 'titleBG');
+    bg.setAlpha(0.9);
+    this.fitImageCover(bg, W, H);
+    this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.55);
+
+    this.add.text(W/2, 80, 'SELECT STAGE', {
+      fontFamily:'Arial Black', fontSize:'40px', color:'#e8f0ff'
+    }).setOrigin(0.5,0.5);
+
+    this.add.text(W/2, 120, 'Higher stage = smarter AI', {
+      fontFamily:'Arial', fontSize:'16px', color:'#cfe1ff'
+    }).setOrigin(0.5,0.5).setAlpha(0.85);
+
+    const startY = 220;
+    STAGES.forEach((st, i) => {
+      const y = startY + i*130;
+      this.makeStageCard(W/2, y, 620, 100, st, () => {
+        this.sfx.click();
+        this.cameras.main.flash(140, 160, 255, 255);
+        this.time.delayedCall(140, () => this.scene.start('main', { stage: st }));
+      });
+    });
+
+    const back = this.makeSmallButton(90, 50, 140, 44, 'BACK', () => {
+      this.sfx.click();
+      this.scene.start('title');
+    });
+    this.add.existing(back);
+  }
+
+  fitImageCover(img, targetW, targetH){
+    const iw = img.width, ih = img.height;
+    const scale = Math.max(targetW/iw, targetH/ih);
+    img.setScale(scale);
+  }
+
+  makeSmallButton(x,y,w,h,label,onClick){
+    const c = this.add.container(x,y);
+    const bg = this.add.rectangle(0,0,w,h,0x0e1530,0.9).setStrokeStyle(2,0x2a3a77,1);
+    const t = this.add.text(0,1,label,{fontFamily:'Arial Black',fontSize:'16px',color:'#e8f0ff'}).setOrigin(0.5);
+    const hit = this.add.rectangle(0,0,w,h,0x000000,0).setInteractive({useHandCursor:true});
+    hit.on('pointerdown',()=>{ c.y+=2; });
+    hit.on('pointerup',()=>{ c.y-=2; onClick(); });
+    c.add([bg,t,hit]);
+    return c;
+  }
+
+  makeStageCard(x,y,w,h,stage,onClick){
+    const c = this.add.container(x,y);
+    const bg = this.add.rectangle(0,0,w,h,0x0b173a,0.88).setStrokeStyle(2,0x61d6ff,0.8);
+    const inner = this.add.rectangle(0,0,w-10,h-10,0x0e1530,0.85).setStrokeStyle(2,0x2a3a77,0.9);
+
+    const left = this.add.text(-w/2+24, -12, stage.name, {
+      fontFamily:'Arial Black', fontSize:'26px', color:'#e8f0ff'
+    }).setOrigin(0,0.5);
+
+    const sub = this.add.text(-w/2+24, 22, stage.desc + `  (AI x${stage.diff.toFixed(2)})`, {
+      fontFamily:'Arial', fontSize:'16px', color:'#cfe1ff'
+    }).setOrigin(0,0.5).setAlpha(0.9);
+
+    const go = this.add.text(w/2-24, 0, 'PLAY ▶', {
+      fontFamily:'Arial Black', fontSize:'22px', color:'#7cffc9'
+    }).setOrigin(1,0.5);
+
+    const hit = this.add.rectangle(0,0,w,h,0x000000,0).setInteractive({useHandCursor:true});
+    hit.on('pointerdown', ()=>{ c.y += 2; });
+    hit.on('pointerup', ()=>{ c.y -= 2; onClick(); });
+
+    c.add([bg, inner, left, sub, go, hit]);
+    return c;
+  }
+}
+
+// =========================
+// Main Game Scene
+// =========================
+class MainScene extends Phaser.Scene {
+  constructor(){ super('main'); }
+  init(data){ this.selectedStage = data?.stage || STAGES[0]; }
+
+  create(){
+    buildTextures(this);
+    this.sfx = new SFX(this);
+
+    dom.thoughtWrap.classList.remove('hidden');
+    dom.thoughtToggle.textContent = 'HIDE';
+
+    dom.timer.style.display = 'block';
+    dom.topHud.style.display = 'grid';
+
+    // background
+    this.add.rectangle(W/2, H/2, W, H, 0x070b18, 1);
+    for(let i=0;i<120;i++){
+      const x = Phaser.Math.Between(0, W);
+      const y = Phaser.Math.Between(0, H);
+      const a = Phaser.Math.FloatBetween(0.15, 0.9);
+      const s = Phaser.Math.Between(1,2);
+      this.add.rectangle(x,y,s,s,0xcfe1ff,a);
+    }
+
+    // containers
+    this.world = this.add.container(0,0).setDepth(0);
+    this.ui    = this.add.container(0,0).setDepth(1000);
+
+    // safe areas
+    this.TOP_SAFE = 120;
+    this.BOTTOM_SAFE = 130;
+
+    const laneY = this.TOP_SAFE + 10;
+    const laneH = H - laneY - this.BOTTOM_SAFE;
+    this.leftLane  = this.makeLane(40,     laneY, 310, laneH, "AI Lane (Left)");
+    this.rightLane = this.makeLane(W-350,  laneY, 310, laneH, "You Lane (Right)");
+    this.world.add([this.leftLane.container, this.rightLane.container]);
+
+    this.centerX = W/2;
+    this.centerY = laneY + laneH/2;
+    const shaft = this.add.image(this.centerX, this.centerY, 'shaft');
+    this.world.add(shaft);
+
+    this.timerY = H/2;
+    this.carHomeY   = this.timerY - 170;
+    this.carActionY = this.timerY + 150;
+
+    this.car = this.add.container(this.centerX, this.carHomeY);
+
+    const carBody = this.add.image(0, 0, 'car').setOrigin(0.5, 1);
+    this.doorL = this.add.image(-52, -90, 'door').setOrigin(0.5);
+    this.doorR = this.add.image( 52, -90, 'door').setOrigin(0.5);
+    this.car.add([carBody, this.doorL, this.doorR]);
+    this.world.add(this.car);
+
+    // controls
+    this.makeControls();
+    this.ctrl.setDepth(2000);
+
+    // state
+    this.state = {
+      round: 1,
+      timer: ROUND_SECONDS,
+      phase: 'BID',
+      animBusy: false,
+
+      player: { budget: START_BUDGET, score: 0, locked: false, bid: 0, lockedBid: null },
+      ai:     { budget: START_BUDGET, score: 0, bid: 0, plannedBid: null },
+
+      // this will be driven by server too
+      aiExpect: { low: 0, high: 0, center: 0, reason: '' },
+
+      history: [],
+      last:   { playerBid: null, aiBid: null, result: null },
+
+      // 종료 사유 상태
+      end: { reason: null, winner: null },
+
+      // Rare round event (VIP / Tax)
+      roundEvent: null,
+    };
+
+    // particles
+    this.particles = this.add.particles(0,0,'px', {
+      speed: { min: 30, max: 120 },
+      angle: { min: 200, max: 340 },
+      lifespan: { min: 250, max: 550 },
+      scale: { start: 1, end: 0 },
+      quantity: 0,
+      gravityY: 200,
+      emitting: false
+    }).setDepth(2500);
+
+    this.input.once('pointerdown', () => { try { this.sound.context.resume(); } catch(e){} });
+    this.input.keyboard.on('keydown-ESC', () => { this.scene.start('stage'); });
+    this.input.keyboard.on('keydown-T', () => dom.thoughtToggle.click());
+
+    this.updateHUD();
+    this.startRound();
+  }
+
+  isWinLocked(forSide /* 'player' | 'ai' */) {
+    const s = this.state;
+    const roundsLeft = Math.max(0, TOTAL_ROUNDS - s.round + 1);
+
+    const myScore  = (forSide === 'player') ? s.player.score : s.ai.score;
+    const oppScore = (forSide === 'player') ? s.ai.score : s.player.score;
+
+    return (myScore - oppScore) > roundsLeft;
+  }
+
+  setEnd(winner /* 'player'|'ai'|'draw' */, reason /* string */) {
+    this.state.end = { winner, reason };
+    this.enterEnd();
+  }
+
+
+  setThought(line){
+    dom.thoughtText.textContent = line;
+    dom.thoughtText.style.opacity = '0.65';
+    clearTimeout(this._thoughtFade);
+    this._thoughtFade = setTimeout(() => { dom.thoughtText.style.opacity = '1'; }, 80);
+  }
+
+  // ========= NEW: LLM planning (bid + expectation + thought) =========
+  async planAIDecision(){
+    const s = this.state;
+
+    // (1) 서버 호출
+    const payload = { state: packStateForServer(this) };
+    const url = `${AI_SERVER}/api/ai/bid`;
+
+    const r = await postJSON(url, payload, AI_TIMEOUT_MS);
+
+    if(r.ok && r.data && r.data.ok){
+      const aiBid = clamp(Number(r.data.ai_bid||0)|0, 0, s.ai.budget);
+      const low = clamp(Number(r.data.expected_player_bid_low||0)|0, 0, s.player.budget);
+      const high = clamp(Number(r.data.expected_player_bid_high||0)|0, 0, s.player.budget);
+      const thought = String(r.data.thought || '').slice(0, 160);
+
+      s.ai.plannedBid = aiBid;
+
+      // 서버 예측값으로 aiExpect 업데이트 (center는 평균으로 잡음)
+      const center = Math.round((low + high) / 2);
+      s.aiExpect = { low, high, center, reason: 'LLM forecast.' };
+
+      // 게임 시작/라운드 시작 멘트
+      if(thought) this.setThought(thought);
+      else this.setThought(`I expect you around $${center} (range $${low}–$${high}).`);
+
+      return true;
+    }
+
+    // (2) 실패시 로컬 폴백
+    s.ai.plannedBid = null;
+    s.aiExpect = this.computeAIExpectation();
+    this.setThought(`(Offline) I expect you around $${s.aiExpect.center} (range $${s.aiExpect.low}–$${s.aiExpect.high}).`);
+    return false;
+  }
+
+  // ---------- controls ----------
+  makeControls(){
+    this.ctrl = this.add.container(W/2, H - 65);
+
+    const bg = this.add.image(0,0,'panel').setDisplaySize(700, 86).setAlpha(0.95);
+    this.ctrl.add(bg);
+
+    this.bidLabel = this.add.text(-350, -28, 'YOUR BID', { fontFamily:'Arial Black', fontSize:'12px', color:'#9bb0ff' });
+    this.bidValue = this.add.text(-350, 2, '0', { fontFamily:'Arial Black', fontSize:'20px', color:'#e8f0ff' });
+
+    this.slider = { x: -140, y: 10, w: 360, h: 12, min: 0, max: START_BUDGET };
+    const track = this.add.rectangle(this.slider.x, this.slider.y, this.slider.w, this.slider.h, 0x0e1530, 1)
+      .setStrokeStyle(2, 0x2a3a77, 1).setOrigin(0,0.5);
+    this.sliderFill = this.add.rectangle(this.slider.x, this.slider.y, 0, this.slider.h, 0x7cffc9, 0.55)
+      .setOrigin(0,0.5);
+    this.sliderKnob = this.add.rectangle(this.slider.x, this.slider.y, 14, 24, 0xe8f0ff, 0.9)
+      .setStrokeStyle(2, 0x2a3a77, 1).setOrigin(0.5,0.5);
+
+    this.lockBtn = this.makeButton(265, 0, 170, 56, 'LOCK', () => this.lockBid());
+
+    this.aiBidCard = this.add.container(0, 0);
+    const cardBg = this.add.rectangle(0,0, 180, 70, 0x0e1530, 1).setStrokeStyle(2, 0x2a3a77, 1);
+    this.aiBidText = this.add.text(0,0, 'AI BID: ?', { fontFamily:'Arial Black', fontSize:'14px', color:'#e8f0ff' }).setOrigin(0.5,0.5);
+    this.aiBidCard.add([cardBg, this.aiBidText]);
+    this.aiBidCard.setPosition(0, -28);
+    this.aiBidCard.setAlpha(0);
+
+    this.ctrl.add([
+      this.bidLabel, this.bidValue,
+      track, this.sliderFill, this.sliderKnob,
+      this.lockBtn.container,
+      this.aiBidCard
+    ]);
+    this.ui.add(this.ctrl);
+
+    const hit = this.add.rectangle(this.slider.x + this.slider.w/2, this.slider.y, this.slider.w, 40, 0x000000, 0)
+      .setOrigin(0.5,0.5).setInteractive({ useHandCursor:true });
+    this.ctrl.add(hit);
+
+    hit.on('pointerdown', (p) => { this.dragging = true; this.setBidFromPointer(p); this.sfx.click(); });
+    this.input.on('pointerup', () => { this.dragging = false; });
+    this.input.on('pointermove', (p) => { if(this.dragging) this.setBidFromPointer(p); });
+
+    this.input.keyboard.on('keydown-SPACE', () => {
+      if(this.lockBtn?.container?.active) this.lockBid();
+    });
+  }
+
+  makeButton(x, y, w, h, label, onClick){
+    const c = this.add.container(x,y);
+    const bg = this.add.rectangle(0,0, w, h, 0x0e1530, 1).setStrokeStyle(2, 0x2a3a77, 1);
+    const t = this.add.text(0, 2, label, { fontFamily:'Arial Black', fontSize:'18px', color:'#e8f0ff' }).setOrigin(0.5,0.5);
+    const hit = this.add.rectangle(0,0,w,h,0x000000,0).setInteractive({ useHandCursor:true });
+
+    hit.on('pointerdown', () => { if(!c.active) return; c.y += 2; this.sfx.click(); });
+    hit.on('pointerup', () => { if(!c.active) return; c.y -= 2; onClick(); });
+
+    c.add([bg,t,hit]);
+    c.active = true;
+    return { container:c, bg, t };
+  }
+
+  // ---------- lanes ----------
+  makeLane(x, y, w, h, title){
+    const container = this.add.container(x,y);
+    const shadow = this.add.rectangle(0,0, w, h, 0x000000, 0.25).setOrigin(0,0);
+    shadow.y += 8;
+    const bg = this.add.rectangle(0,0, w, h, 0x121a33, 1).setOrigin(0,0).setStrokeStyle(2, 0x2a3a77, 1);
+    const t = this.add.text(14, 12, title, { fontFamily:'Arial Black', fontSize:'12px', color:'#9bb0ff' });
+    const box = this.add.rectangle(14, 48, w-28, h-62, 0x000000, 0).setOrigin(0,0).setStrokeStyle(2, 0x2a3a77, 0.25);
+
+    const slots = [];
+    const rows = 10;
+    const topPad = 80;
+    const bottomPad = 40;
+    const usable = (h - topPad - bottomPad);
+    const step = usable / (rows - 1);
+
+    for(let i=0;i<rows;i++){
+      const sy = bottomPad + (rows-1-i)*step; // bottom -> top
+      const sx = title.includes('Left') ? 52 : (w-52);
+      slots.push({ x: x+sx, y: y+sy });
+    }
+    container.add([shadow, bg, t, box]);
+    return { container, slots, count:0, title };
+  }
+
+  // ---------- bidding ----------
+  setBidFromPointer(pointer){
+    const s = this.state;
+    if(s.phase !== 'BID' || s.animBusy) return;
+    if(s.player.locked) return;
+
+    const local = this.ctrl.getWorldTransformMatrix().applyInverse(pointer.x, pointer.y);
+    const px = clamp(local.x, this.slider.x, this.slider.x + this.slider.w);
+    const t = (px - this.slider.x) / this.slider.w;
+
+    const maxBid = s.player.budget;
+    const bid = Math.round(lerp(0, maxBid, t));
+    s.player.bid = bid;
+
+    const fillW = (bid / (maxBid || 1)) * this.slider.w;
+    this.sliderFill.width = clamp(fillW, 0, this.slider.w);
+    this.sliderKnob.x = this.slider.x + (bid / (maxBid || 1)) * this.slider.w;
+
+    this.bidValue.setText(String(bid));
+  }
+
+  // ---------- local AI expectation model (fallback only) ----------
+  computeAIExpectation(){
+    const s = this.state;
+    const diff = this.selectedStage.diff;
+
+    const recent = s.history.slice(-3).map(r => r.playerBid);
+    const baseCenter = recent.length ? mean(recent) : Math.max(6, Math.round(START_BUDGET * 0.12));
+    const spread = recent.length ? Math.sqrt(variance(recent)) : 8;
+
+    const confidence = clamp(0.55 + (diff-1)*0.25, 0.55, 0.82);
+    const unc = clamp(spread + 10*(1-confidence), 6, 20);
+
+    const budgetFactor = clamp(s.player.budget / START_BUDGET, 0.15, 1);
+    const center = clamp(Math.round(baseCenter * (0.75 + 0.35*budgetFactor)), 0, s.player.budget);
+
+    const low  = clamp(Math.round(center - unc), 0, s.player.budget);
+    const high = clamp(Math.round(center + unc), low, s.player.budget);
+
+    let reason = 'Based on your recent bidding tempo.';
+    if(recent.length === 0) reason = 'No prior data. Using market baseline.';
+    else if(spread < 10) reason = 'Your bids are consistent, model confidence is higher.';
+    else if(spread >= 10) reason = 'High variance detected—expectation band widened.';
+
+    return { low, high, center, reason };
+  }
+
+  // ---------- phases ----------
+  startRound(){
+    const s = this.state;
+    s.phase = 'START';
+    s.roundEvent = null;
+
+    const evt = rollRoundEvent(s.round);
+    s.roundEvent = evt;
+
+    const goBid = () => this.enterBidPhase();
+    if(evt){
+      this.showRoundEventPopup(evt).then(goBid);
+    } else {
+      goBid();
+    }
+  }
+
+  showRoundEventPopup(evt){
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.style.position = 'fixed';
+      overlay.style.inset = '0';
+      overlay.style.zIndex = '9999'; // above timer/top HUD
+      overlay.style.display = 'flex';
+      overlay.style.alignItems = 'center';
+      overlay.style.justifyContent = 'center';
+      overlay.style.background = 'rgba(0,0,0,0.55)';
+
+      const panel = document.createElement('div');
+      panel.style.minWidth = '520px';
+      panel.style.maxWidth = '90vw';
+      panel.style.padding = '22px 24px';
+      panel.style.background = 'rgba(14,21,48,0.95)';
+      panel.style.border = '2px solid rgba(97,214,255,0.9)';
+      panel.style.boxShadow = '0 12px 0 rgba(0,0,0,0.35)';
+      panel.style.borderRadius = '12px';
+      panel.style.textAlign = 'center';
+      panel.style.fontFamily = 'Arial, sans-serif';
+      panel.style.color = '#e8f0ff';
+
+      const title = document.createElement('div');
+      title.textContent = evt.name;
+      title.style.fontFamily = 'Arial Black, Arial, sans-serif';
+      title.style.fontSize = '22px';
+      title.style.color = '#ffd166';
+      title.style.marginBottom = '10px';
+
+      const desc = document.createElement('div');
+      desc.textContent = evt.desc;
+      desc.style.fontSize = '16px';
+      desc.style.opacity = '0.9';
+
+      panel.appendChild(title);
+      panel.appendChild(desc);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+
+      // audio ping (non-blocking, short)
+      try { this.sfx.beep({ freq: 760, dur: 0.28, gain: 0.025, type: 'triangle' }); } catch(_e){}
+
+      let closed = false;
+      const close = () => {
+        if(closed) return;
+        closed = true;
+        overlay.remove();
+        resolve();
+      };
+
+      overlay.addEventListener('pointerdown', close);
+      setTimeout(close, 1800);
+    });
+  }
+
+  enterBidPhase(){
+    const s = this.state;
+    s.phase = 'BID';
+    s.timer = ROUND_SECONDS;
+    s.player.locked = false;
+    s.player.lockedBid = null;
+    s.ai.bid = 0;
+    s.ai.plannedBid = null;
+
+    this.aiBidCard.setAlpha(0);
+    this.lockBtn.container.active = true;
+    this.lockBtn.bg.fillColor = 0x0e1530;
+
+    dom.timerSub.textContent = 'PLACE YOUR BID';
+
+    // idle bob
+    this.tweens.killTweensOf(this.car);
+    this.tweens.add({
+      targets: this.car,
+      y: this.carHomeY - 3,
+      duration: 800,
+      ease: 'Sine.easeInOut',
+      yoyo: true,
+      repeat: -1
+    });
+
+    // timer event
+    if(this.timerEvent) this.timerEvent.remove(false);
+    this.timerEvent = this.time.addEvent({
+      delay: 1000,
+      loop: true,
+      callback: () => this.onSecondTick()
+    });
+
+    // >>> NEW: LLM에게 이번 라운드 AI bid/멘트/예측을 미리 받아서 저장 (bid는 reveal 전까지 숨김)
+    this.setThought('AI is thinking…');
+    this.planAIDecision().finally(()=>{ /* no-op */ });
+
+    this.updateHUD();
+  }
+
+  onSecondTick(){
+    const s = this.state;
+    if(s.phase !== 'BID' || s.animBusy) return;
+
+    s.timer -= 1;
+    if(s.timer <= 0){
+      if(!s.player.locked){
+        s.player.locked = true;
+        s.player.lockedBid = s.player.bid;
+      }
+      this.timerEvent.remove(false);
+      this.enterRevealPhase();
+    } else {
+      if(s.timer <= 3) this.sfx.beep({freq: 520 + (3-s.timer)*120, dur:0.03, gain:0.015});
+      this.updateHUD();
+    }
+  }
+
+  lockBid(){
+    const s = this.state;
+    if(s.phase !== 'BID' || s.animBusy) return;
+    if(s.player.locked) return;
+
+    s.player.locked = true;
+    s.player.lockedBid = s.player.bid;
+    this.lockBtn.container.active = false;
+    this.lockBtn.bg.fillColor = 0x1b2a61;
+    this.sfx.lock();
+
+    const e = s.aiExpect;
+    const pb = s.player.lockedBid;
+    const dev = pb - e.center;
+    const hint = (dev > 12) ? 'Aggressive.' : (dev < -12) ? 'Conservative.' : 'Within expectation.';
+    this.setThought(`Locked at $${pb}. ${hint} (Expected ~$${e.center})`);
+
+    dom.timerSub.textContent = 'WAITING…';
+  }
+
+  enterRevealPhase(){
+    const s = this.state;
+    s.phase = 'REVEAL';
+    s.animBusy = true;
+
+    this.tweens.killTweensOf(this.car);
+
+    // >>> NEW: 서버에서 미리 받아둔 plannedBid 사용 (없으면 로컬 폴백)
+    s.ai.bid = (typeof s.ai.plannedBid === 'number')
+      ? clamp(s.ai.plannedBid, 0, s.ai.budget)
+      : this.computeAIBid();
+
+    dom.timerSub.textContent = 'REVEAL';
+
+    const veil = this.add.rectangle(W/2, H/2, W, H, 0x000000, 0).setDepth(5000);
+    this.ui.add(veil);
+
+    this.sfx.reveal();
+
+    this.aiBidText.setText('AI BID: ?');
+    this.aiBidCard.setAlpha(1);
+    this.aiBidCard.setScale(0.95);
+
+    this.tweens.add({ targets: veil, alpha: 0.22, duration: 180, ease: 'Quad.easeOut' });
+
+    this.tweens.add({
+      targets: this.aiBidCard,
+      scaleX: 0.0,
+      duration: 220,
+      ease: 'Back.easeIn',
+      onComplete: () => {
+        this.aiBidText.setText('AI BID: ' + s.ai.bid);
+        this.tweens.add({ targets: this.aiBidCard, scaleX: 1.0, duration: 260, ease: 'Back.easeOut' });
+      }
+    });
+
+    this.time.delayedCall(900, () => {
+      this.ui.remove(veil, true);
+      this.enterResolvePhase();
+    });
+  }
+
+  enterResolvePhase(){
+    const s = this.state;
+    s.phase = 'RESOLVE';
+
+    const playerBid = clamp(s.player.lockedBid ?? 0, 0, s.player.budget);
+    const aiBid = clamp(s.ai.bid ?? 0, 0, s.ai.budget);
+
+    s.player.budget -= playerBid;
+    s.ai.budget -= aiBid;
+
+    let result = 'draw';
+    if(playerBid > aiBid) result = 'player';
+    else if(aiBid > playerBid) result = 'ai';
+
+    if(result === 'player') s.player.score += 1;
+    if(result === 'ai') s.ai.score += 1;
+
+    // Tax Collector: winner pays +3 after round (no effect on tie)
+    if(s.roundEvent?.id === 'tax' && result !== 'draw'){
+      if(result === 'player') s.player.budget = Math.max(0, s.player.budget - 3);
+      if(result === 'ai') s.ai.budget = Math.max(0, s.ai.budget - 3);
+    }
+
+    s.last = { playerBid, aiBid, result };
+
+    const e = s.aiExpect;
+    const diffFromExpected = playerBid - e.center;
+    s.history.push({
+      round: s.round,
+      stageId: this.selectedStage.id,
+      expectedLow: e.low,
+      expectedHigh: e.high,
+      expectedCenter: e.center,
+      playerBid,
+      aiBid,
+      result,
+      diffFromExpected,
+      event: s.roundEvent ? s.roundEvent.name : null,
+      ts: Date.now()
+    });
+
+    // after-round AI comment (로컬 문장 유지 — 원하면 이것도 서버로 바꿔줄 수 있음)
+    this.setThought(this.makeAIAfterRoundLine(e, playerBid, aiBid, result));
+
+    dom.timerSub.textContent =
+      result === 'draw' ? 'DRAW' : (result === 'player' ? 'YOU WIN' : 'AI WINS');
+
+    this.updateHUD();
+
+    this.time.delayedCall(500, async () => {
+      if(result === 'draw'){
+        s.animBusy = false;
+        this.enterNextRound();
+        return;
+      }
+      const passengerCount = (s.roundEvent?.id === 'vip' && result !== 'draw') ? 2 : 1;
+      await this.playElevatorAction(result, passengerCount);
+      s.animBusy = false;
+      this.enterNextRound();
+    });
+  }
+
+  makeAIAfterRoundLine(expect, playerBid, aiBid, result){
+    const within = (playerBid >= expect.low && playerBid <= expect.high);
+    const delta = playerBid - expect.center;
+    const dTxt = (delta >= 0) ? `+${delta}` : `${delta}`;
+    const read = within ? 'within my band' : 'outside my band';
+
+    let tone = 'Market read confirmed.';
+    if(!within && Math.abs(delta) >= 15) tone = 'Your move broke my model.';
+    else if(!within) tone = 'Unexpected drift detected.';
+
+    let outcome = '';
+    if(result === 'player') outcome = 'You outbid me.';
+    else if(result === 'ai') outcome = 'I priced you out.';
+    else outcome = 'Deadlock: no passenger moves.';
+
+    return `I expected $${expect.center} (range $${expect.low}–$${expect.high}). You bid $${playerBid} (${dTxt}, ${read}). ${tone} ${outcome}`;
+  }
+
+  // =========================
+  // ELEVATOR ACTION
+  // =========================
+  async playElevatorAction(winner, passengerCount=1){
+    const s = this.state;
+    s.phase = 'ACTION';
+    s.animBusy = true;
+
+    await this.closeDoors(true);
+    this.tweens.killTweensOf(this.car);
+    await this.tweenP({ targets: this.car, y: this.carActionY, duration: 520, ease: 'Cubic.easeInOut' });
+
+    await this.delayP(220);
+
+    this.sfx.ding();
+    await this.openDoors();
+
+    for(let i=0;i<passengerCount;i++){
+      const p = this.spawnPersonSprite(winner);
+      await this.moveSprite(p, this.centerX, this.car.y - 30, 160, 'Quad.easeOut');
+
+      this.emitParticles(this.centerX, this.car.y - 30, winner === 'player' ? 0x7cffc9 : 0xff6b6b);
+
+      const lane = (winner === 'ai') ? this.leftLane : this.rightLane;
+      const slot = lane.slots[lane.count] || lane.slots[lane.slots.length - 1];
+      lane.count = Math.min(lane.count + 1, lane.slots.length);
+
+      this.startWalkAnim(p, winner);
+      await this.moveSprite(p, slot.x, slot.y, 820, 'Cubic.easeInOut');
+      this.stopWalkAnim(p, winner);
+    }
+
+    await this.closeDoors(false);
+    await this.tweenP({ targets: this.car, y: this.carHomeY, duration: 420, ease: 'Sine.easeInOut' });
+  }
+
+  enterNextRound(){
+    const s = this.state;
+    s.phase = 'NEXT';
+
+    // 0) 라운드가 끝났으니 남은 라운드 수 계산
+    const roundsLeft = Math.max(0, TOTAL_ROUNDS - s.round + 1);
+
+    // 1) ✅ Lock Win (승리 확정) 먼저 체크 → 즉시 종료
+    if (this.isWinLocked('player')) {
+      this.setEnd('player', `LOCKED_WIN (lead too large for ${roundsLeft} rounds left)`);
+      return;
+    }
+    if (this.isWinLocked('ai')) {
+      this.setEnd('ai', `LOCKED_WIN (lead too large for ${roundsLeft} rounds left)`);
+      return;
+    }
+
+    // 2) ✅ Budget 0 즉시 패배 (Lock win 아님이 보장됨)
+    if (s.player.budget <= 0 && s.ai.budget <= 0) {
+      this.setEnd('draw', 'DOUBLE_BANKRUPT');
+      return;
+    }
+    if (s.player.budget <= 0) {
+      this.setEnd('ai', 'PLAYER_BANKRUPT');
+      return;
+    }
+    if (s.ai.budget <= 0) {
+      this.setEnd('player', 'AI_BANKRUPT');
+      return;
+    }
+
+    // 3) ✅ 정상 종료 (라운드 다 끝남)
+    if (s.round >= TOTAL_ROUNDS) {
+      // 라운드가 끝났고 lock win도 아니고 bankrupt도 아니면 점수로 승패
+      if (s.player.score > s.ai.score) this.setEnd('player', 'ROUNDS_COMPLETE_SCORE');
+      else if (s.ai.score > s.player.score) this.setEnd('ai', 'ROUNDS_COMPLETE_SCORE');
+      else this.setEnd('draw', 'ROUNDS_COMPLETE_TIE');
+      return;
+    }
+
+    // 4) 다음 라운드 진행
+    this.time.delayedCall(450, () => {
+      s.round += 1;
+      this.startRound();
+    });
+  }
+
+
+  enterEnd(){
+    const s = this.state;
+    s.phase = 'END';
+    this.lockBtn.container.active = false;
+    this.showEndReport();
+  }
+
+  async showEndReport(){
+    const s = this.state;
+
+    const bids = s.history.map(r => r.playerBid);
+    const aiBids = s.history.map(r => r.aiBid);
+    const expected = s.history.map(r => r.expectedCenter);
+
+    const avgBid = Math.round(mean(bids));
+    const avgAI  = Math.round(mean(aiBids));
+    const sdBid  = Math.round(Math.sqrt(variance(bids)));
+
+    const efficiency = bids.length ? Math.round((s.player.score / Math.max(1, mean(bids))) * 100) : 0;
+    const bluffRate = bids.length ? Math.round(100 * (bids.filter((b,i)=>Math.abs(b-expected[i])>=15).length / bids.length)) : 0;
+    const withinRate = bids.length ? Math.round(100 * (s.history.filter(r => r.playerBid >= r.expectedLow && r.playerBid <= r.expectedHigh).length / bids.length)) : 0;
+
+    const wins = s.player.score, losses = s.ai.score, draws = TOTAL_ROUNDS - wins - losses;
+
+    let risk = 'Balanced';
+    if(avgBid >= 20) risk = 'Aggressive';
+    if(avgBid <= 10) risk = 'Conservative';
+
+    const afterLossBids = [];
+    s.history.forEach((r, idx) => {
+      if(idx > 0 && s.history[idx-1].result === 'ai') afterLossBids.push(r.playerBid);
+    });
+    const adaptScore = afterLossBids.length ? (mean(afterLossBids) - mean(bids)) : 0;
+    let adapt = 'Moderate';
+    if(adaptScore >= 6) adapt = 'Reactive (raises after losses)';
+    if(adaptScore <= -6) adapt = 'Calm (does not chase losses)';
+
+    let effLabel = 'Medium';
+    if(efficiency >= 10) effLabel = 'High';
+    if(efficiency <= 6) effLabel = 'Low';
+
+    const endWinner = s.end?.winner || null;
+    const endReason = s.end?.reason || null;
+
+    let outcome = 'MATCH DRAW!';
+    let outcomeSub = ''; // 추가 설명 (작게)
+
+    if (endWinner === 'player') outcome = 'YOU WIN THE MATCH!';
+    else if (endWinner === 'ai') outcome = 'AI WINS THE MATCH!';
+    else if (endWinner === 'draw') outcome = 'MATCH DRAW!';
+
+    // reason 기반 문구
+    if (endReason === 'PLAYER_BANKRUPT') outcomeSub = 'Victory by bankruptcy (You hit $0).';
+    else if (endReason === 'AI_BANKRUPT') outcomeSub = 'Victory by bankruptcy (AI hit $0).';
+    else if (endReason === 'DOUBLE_BANKRUPT') outcomeSub = 'Both budgets hit $0.';
+    else if (String(endReason || '').startsWith('LOCKED_WIN')) outcomeSub = 'Win locked: opponent cannot catch up in remaining rounds.';
+    else if (endReason === 'ROUNDS_COMPLETE_SCORE') outcomeSub = 'All rounds completed.';
+    else if (endReason === 'ROUNDS_COMPLETE_TIE') outcomeSub = 'All rounds completed (tie).';
+
+    // fallback: if endWinner not provided, infer from score
+    if (!endWinner) {
+      if (wins > losses) outcome = 'YOU WIN THE MATCH!';
+      else if (losses > wins) outcome = 'AI WINS THE MATCH!';
+    }
+
+    dom.thoughtWrap.classList.add('hidden');
+    dom.thoughtToggle.textContent = 'SHOW';
+    dom.timerSub.textContent = 'REPORT';
+
+    const overlay = this.add.container(W/2, H/2).setDepth(9000);
+    const veil = this.add.rectangle(0,0,W,H,0x000000,0.72).setInteractive();
+    overlay.add(veil);
+
+    const card = this.add.rectangle(0,0, 860, 560, 0x0e1530, 0.94).setStrokeStyle(2,0x61d6ff,0.9);
+    overlay.add(card);
+
+    const title = this.add.text(0, -245, 'POST-GAME REPORT', {
+      fontFamily:'Arial Black', fontSize:'34px', color:'#e8f0ff'
+    }).setOrigin(0.5);
+
+    const subtitle = this.add.text(0, -210, outcome, {
+      fontFamily:'Arial Black', fontSize:'18px', color:'#ffd166'
+    }).setOrigin(0.5).setAlpha(0.95);
+
+    const subtitle2 = this.add.text(0, -186, outcomeSub, {
+      fontFamily:'Arial', fontSize:'14px', color:'#cfe1ff'
+    }).setOrigin(0.5).setAlpha(outcomeSub ? 0.85 : 0);
+
+    overlay.add([title, subtitle, subtitle2]);
+
+    const leftX = -380, topY = -150;
+    const sec1 = this.add.text(leftX, topY, 'YOUR CAPITAL PROFILE', {
+      fontFamily:'Arial Black', fontSize:'14px', color:'#9bb0ff'
+    }).setOrigin(0,0);
+
+    const lines = [
+      `Risk Posture:  ${risk}`,
+      `Capital Efficiency:  ${effLabel}  (${efficiency}/100)`,
+      `Volatility (SD):  ${sdBid}`,
+      `Prediction Fit:  ${withinRate}% within AI band`,
+      `Bluff Rate:  ${bluffRate}% (>= $15 off expected)`,
+      `Adaptability:  ${adapt}`,
+    ];
+
+    const body = this.add.text(leftX, topY+34, lines.join('\n'), {
+      fontFamily:'Arial', fontSize:'18px', color:'#e8f0ff',
+      lineSpacing: 10
+    }).setOrigin(0,0);
+
+    const rightX = 90;
+    const sec2 = this.add.text(rightX, topY, 'MATCH SUMMARY', {
+      fontFamily:'Arial Black', fontSize:'14px', color:'#9bb0ff'
+    }).setOrigin(0,0);
+
+    const played = s.history.length;
+    const maxRounds = TOTAL_ROUNDS;
+    const endedEarly = played < maxRounds;
+
+    let endLine = '';
+    if (s.end?.reason) endLine = `End Condition:  ${s.end.reason}`;
+
+    const sumLines = [
+      `Max Rounds:  ${maxRounds}`,
+      `Rounds Played:  ${played}${endedEarly ? ' (ended early)' : ''}`,
+      `Wins / Losses / Draws:  ${wins} / ${losses} / ${draws}`,
+      `Avg Your Bid:  $${avgBid}`,
+      `Avg AI Bid:  $${avgAI}`,
+      `Final Budgets:  You $${s.player.budget} | AI $${s.ai.budget}`,
+    ];
+    if (endLine) sumLines.push(endLine);
+
+    const body2 = this.add.text(rightX, topY+34, sumLines.join('\n'), {
+      fontFamily:'Arial', fontSize:'18px', color:'#e8f0ff',
+      lineSpacing: 10
+    }).setOrigin(0,0);
+
+    const takeawayTitle = this.add.text(rightX, topY+200, 'AI TAKEAWAY', {
+      fontFamily:'Arial Black', fontSize:'14px', color:'#9bb0ff'
+    }).setOrigin(0,0);
+
+    // >>> NEW: 서버 리포트 자리 (없으면 기존 로컬 takeway 사용)
+    const takeawayBody = this.add.text(rightX, topY+234, `"Generating LLM report..."`, {
+      fontFamily:'Arial', fontSize:'18px', color:'#7cffc9',
+      wordWrap: { width: 360 }
+    }).setOrigin(0,0);
+
+    const judgeSafe = this.add.text(0, 230,
+      `Judge-safe framing:\nThis is a behavioral summary derived from in-game decisions.\nNot real financial profiling.`,
+      { fontFamily:'Arial', fontSize:'14px', color:'#cfe1ff', align:'center' }
+    ).setOrigin(0.5,0.5).setAlpha(0.75);
+
+    overlay.add([sec1, body, sec2, body2, takeawayTitle, takeawayBody, judgeSafe]);
+
+    const btnRestart = this.makeButton(-140, 265, 240, 56, 'RESTART', () => this.scene.restart({ stage: this.selectedStage }));
+    const btnStages  = this.makeButton( 160, 265, 240, 56, 'STAGES',  () => this.scene.start('stage'));
+    overlay.add([btnRestart.container, btnStages.container]);
+
+    this.ui.add(overlay);
+    this.cameras.main.flash(220, 160, 255, 255);
+
+    // 서버 리포트 호출
+    const payload = { state: packStateForServer(this) };
+    const rr = await postJSON(`${AI_SERVER}/api/ai/report`, payload, Math.max(AI_TIMEOUT_MS, 1600));
+    if(rr.ok && rr.data && rr.data.ok && rr.data.report){
+      const text = String(rr.data.report).trim();
+      takeawayBody.setText(`"${text}"`);
+    } else {
+      // 로컬 폴백
+      const fallback = this.buildTakeaway(risk, effLabel, bluffRate, withinRate, wins, losses);
+      takeawayBody.setText(`"${fallback}"`);
+    }
+  }
+
+  buildTakeaway(risk, eff, bluffRate, withinRate, wins, losses){
+    if(wins > losses){
+      if(risk === 'Aggressive' && eff === 'Low') return 'You bought wins early—powerful, but expensive. Try smarter timing.';
+      if(bluffRate >= 35) return 'Your unpredictability paid off. Keep mixing ranges to break AI expectations.';
+      return 'Solid pacing. You kept control of the market and converted bids into drops efficiently.';
+    } else if(losses > wins){
+      if(withinRate >= 70) return 'You played inside the expected band—too readable. Add deliberate deviations.';
+      if(risk === 'Conservative') return 'You saved money, but surrendered tempo. Sometimes you must pay to control.';
+      return 'AI adapted faster. Reduce variance and punish specific rounds with decisive bids.';
+    }
+    return 'Close match. Your edge will come from better timing—save big bids for swing rounds.';
+  }
+
+  // ---------- doors ----------
+  openDoors(){
+    return new Promise(resolve => {
+      this.sfx.door();
+      this.tweens.add({ targets: this.doorL, x: -120, duration: 380, ease: 'Cubic.easeOut' });
+      this.tweens.add({ targets: this.doorR, x:  120, duration: 380, ease: 'Cubic.easeOut',
+        onComplete: () => this.time.delayedCall(120, resolve)
+      });
+    });
+  }
+
+  closeDoors(immediateSnap=false){
+    return new Promise(resolve => {
+      this.sfx.door();
+
+      if(immediateSnap){
+        this.tweens.killTweensOf(this.doorL);
+        this.tweens.killTweensOf(this.doorR);
+        this.doorL.x = -52;
+        this.doorR.x =  52;
+        this.time.delayedCall(0, resolve);
+        return;
+      }
+
+      this.tweens.add({ targets: this.doorL, x: -52, duration: 320, ease: 'Cubic.easeIn' });
+      this.tweens.add({ targets: this.doorR, x:  52, duration: 320, ease: 'Cubic.easeIn',
+        onComplete: () => this.time.delayedCall(80, resolve)
+      });
+    });
+  }
+
+  // ---------- person ----------
+  spawnPersonSprite(winner){
+    const key = (winner === 'player') ? 'pA' : 'aA';
+    const spr = this.add.image(this.centerX, this.car.y - 18, key).setOrigin(0.5, 1).setDepth(20);
+    if(winner === 'ai') spr.setFlipX(true);
+    const sh = this.add.rectangle(spr.x, spr.y+4, 22, 6, 0x000000, 0.25).setDepth(19);
+    spr._shadow = sh;
+    return spr;
+  }
+  startWalkAnim(spr, winner){
+    const a = winner === 'player' ? 'p' : 'a';
+    spr._walk = this.time.addEvent({
+      delay: 120,
+      loop: true,
+      callback: () => {
+        const cur = spr.texture.key;
+        spr.setTexture(cur.endsWith('A') ? (a+'B') : (a+'A'));
+      }
+    });
+  }
+  stopWalkAnim(spr, winner){
+    if(spr._walk){ spr._walk.remove(false); spr._walk = null; }
+    spr.setTexture(winner === 'player' ? 'pA' : 'aA');
+  }
+  moveSprite(spr, x, y, duration, ease='Cubic.easeInOut'){
+    return new Promise(resolve => {
+      this.tweens.add({
+        targets: spr, x, y, duration, ease,
+        onUpdate: () => { if(spr._shadow){ spr._shadow.x = spr.x; spr._shadow.y = spr.y + 4; } },
+        onComplete: resolve
+      });
+    });
+  }
+  emitParticles(x,y,color){
+    this.particles.setParticleTint(color);
+    this.particles.emitParticleAt(x, y, 10);
+  }
+
+  // ---------- AI (local fallback) ----------
+  computeAIBid(){
+    const s = this.state;
+    const prof = this.selectedStage.profile || {};
+    const diff = this.selectedStage.diff || 1;
+
+    const roundsLeft = Math.max(1, TOTAL_ROUNDS - s.round + 1);
+    const roundProgress = (s.round-1) / Math.max(1, TOTAL_ROUNDS-1);
+    const scoreGap = s.ai.score - s.player.score; // positive = AI ahead
+    const aiBudget = Math.max(0, s.ai.budget);
+    const playerBudget = Math.max(0, s.player.budget);
+
+    const lockedWin = this.isWinLocked('ai');
+    const lockedLose = this.isWinLocked('player');
+
+    // Expected player bid baseline
+    const expectLow = s.aiExpect?.low ?? 0;
+    const expectHigh = s.aiExpect?.high ?? Math.round(playerBudget * 0.18);
+    const expectCenter = s.aiExpect?.center ?? Math.round(playerBudget * 0.16);
+    const locked = s.player.lockedBid ?? s.player.bid ?? expectCenter;
+    const playerLikely = clamp(locked, expectLow, Math.max(expectHigh, locked, 0));
+
+    // Profile knobs
+    const aggression = prof.aggression ?? 1;
+    const conserve = prof.conserve ?? 0.5;
+    const spendCeil = prof.spendCeil ?? 0.25;
+    const bluffChance = prof.bluff ?? 0.1;
+
+    // Pressure: losing and few rounds left -> push; winning comfortably -> conserve but block
+    const pressureBase = clamp(
+      (-scoreGap / Math.max(1, roundsLeft)) + // if behind, positive pressure
+      (roundProgress > 0.7 ? 0.15 : 0) +
+      (playerBudget > aiBudget ? 0.1 : 0),
+      -0.4, 1.6
+    );
+    const pressure = lockedLose ? 1.6 : lockedWin ? -0.4 : pressureBase;
+
+    // Base spend band
+    const baseSpend = aiBudget / roundsLeft;
+    const conserveFactor = lerp(0.6, 0.9, conserve);
+    const aggroFactor = lerp(0.95, 1.35, clamp(aggression, 0.6, 1.8)) + pressure * 0.3;
+
+    let minSpend = baseSpend * conserveFactor * (1 + pressure * 0.35);
+    let maxSpend = baseSpend * aggroFactor * (1.15 + pressure);
+
+    // Ceiling based on profile and pressure
+    const maxCeil = aiBudget * clamp(spendCeil + pressure * 0.25, 0.12, 0.9);
+    maxSpend = Math.min(maxSpend, maxCeil);
+
+    // Ensure we contest expected high
+    const targetBeat = playerLikely + 2 + Math.max(0, pressure * 4);
+    maxSpend = Math.max(maxSpend, targetBeat * 1.05);
+    minSpend = Math.max(minSpend, targetBeat * 0.6);
+
+    // Clamp band
+    minSpend = clamp(minSpend, 1, aiBudget);
+    maxSpend = clamp(maxSpend, minSpend + 1, aiBudget);
+
+    // Predictability adjustment
+    const recent = s.history.slice(-5).map(r => r.playerBid || 0);
+    const variance = recent.length ? Math.sqrt(this.varianceArr(recent)) : 0;
+    const predictability = clamp(1 - (variance / 25), 0.35, 0.95);
+
+    // Base bid as blend: predictable -> closer to min; chaotic -> mid/high
+    let bid = lerp(minSpend, maxSpend, 0.45 + (1 - predictability) * 0.35);
+
+    // Locked states
+    if (lockedWin) {
+      bid = Math.min(bid, Math.max(1, expectLow)); // conserve when win is locked
+    } else if (lockedLose) {
+      bid = Math.max(maxSpend * 0.95, targetBeat); // go all-in-ish when doomed
+    }
+
+    // Bluff / spike behavior
+    const doBluff = Math.random() < (bluffChance + pressure * 0.05 + (diff-1)*0.05);
+    if (doBluff) {
+      const spike = lerp(maxSpend, Math.min(aiBudget, targetBeat + 14), 0.7);
+      bid = Math.max(bid, spike);
+    }
+
+    bid = Math.round(clamp(bid, 0, aiBudget));
+    return bid;
+  }
+
+  // helper for computeAIBid
+  varianceArr(arr){
+    if(!arr.length) return 0;
+    const m = mean(arr);
+    return arr.reduce((acc,v)=> acc + Math.pow(v-m,2),0) / arr.length;
+  }
+
+  // ---------- HUD update (DOM) ----------
+  updateHUD(){
+    const s = this.state;
+
+    dom.round.textContent = `${s.round}/${TOTAL_ROUNDS}`;
+    dom.youBudget.textContent = `${s.player.budget}`;
+    dom.aiBudget.textContent = `${s.ai.budget}`;
+    dom.youScore.textContent = `${s.player.score}`;
+    dom.aiScore.textContent = `${s.ai.score}`;
+
+    const t = Math.max(0, s.timer);
+    dom.timer.firstChild.nodeValue = `${t}s`;
+
+    if(s.phase === 'BID'){
+      if(t <= 3) dom.timer.style.borderColor = 'rgba(255,107,107,0.95)';
+      else if(t <= 6) dom.timer.style.borderColor = 'rgba(255,209,102,0.95)';
+      else dom.timer.style.borderColor = 'rgba(97,214,255,0.85)';
+    } else {
+      dom.timer.style.borderColor = 'rgba(42,58,119,0.95)';
+    }
+
+    const canLock = (s.phase === 'BID' && !s.animBusy && !s.player.locked);
+    this.lockBtn.container.active = canLock;
+    this.lockBtn.bg.fillColor = canLock ? 0x0e1530 : 0x1b2a61;
+
+    if(s.phase === 'BID'){
+      s.player.bid = clamp(s.player.bid, 0, s.player.budget);
+      this.bidValue.setText(String(s.player.bid));
+      const maxBid = Math.max(1, s.player.budget);
+      this.sliderFill.width = (s.player.bid / maxBid) * this.slider.w;
+      this.sliderKnob.x = this.slider.x + (s.player.bid / maxBid) * this.slider.w;
+    }
+
+    if(s.phase !== 'BID') this.aiBidCard.setAlpha(1);
+    if(s.phase === 'BID') this.aiBidCard.setAlpha(0);
+  }
+
+  // ---------- tiny async helpers ----------
+  tweenP(cfg){ return new Promise(resolve => this.tweens.add({ ...cfg, onComplete: resolve })); }
+  delayP(ms){ return new Promise(resolve => this.time.delayedCall(ms, resolve)); }
+
+  update(){
+    this.updateHUD();
+  }
+}
+
+// =========================
+// Phaser Game
+// =========================
+const config = {
+  type: Phaser.AUTO,
+  parent: 'game',
+  backgroundColor: '#070b18',
+  width: W,
+  height: H,
+  pixelArt: true,
+  antialias: false,
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+    width: W,
+    height: H
+  },
+  scene: [BootScene, TitleScene, StageScene, MainScene]
+};
+
+new Phaser.Game(config);
+
+/* ===== END: PATCHED SCRIPT ===== */
+</script>
+</body>
+</html>
