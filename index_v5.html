@@ -882,7 +882,7 @@ class MainScene extends Phaser.Scene {
       const aiBid = clamp(Number(r.data.ai_bid||0)|0, 0, s.ai.budget);
       const low = clamp(Number(r.data.expected_player_bid_low||0)|0, 0, s.player.budget);
       const high = clamp(Number(r.data.expected_player_bid_high||0)|0, 0, s.player.budget);
-      const thought = String(r.data.thought || '').slice(0, 160);
+      const thought = String(r.data.thought || '').trim();
 
       s.ai.plannedBid = aiBid;
 
