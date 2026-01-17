@@ -524,7 +524,7 @@ app.post("/api/ai/bid", async (req, res) => {
       valueWin: adaptive.valueWin,
       costWeight: adaptive.costWeight,
       finalBid: ai_bid,
-      thought: thought.slice(0, 80),
+      thought: thought.slice(0, 500),
     });
 
     return res.json({
